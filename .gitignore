@@ -12,6 +12,10 @@ CLAUDE.md
 # internal paths (and, if ever de-symlinked, internal content) in this public repo.
 .claude/
 
+# Server connection notes with live root credentials. This repo is public.
+REMOTE_SERVER.md
+TEST-SERVER-CONNECTION.md
+
 # Python bytecode — never commit
 __pycache__/
 *.pyc
