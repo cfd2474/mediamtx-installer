@@ -34,7 +34,7 @@ def add_no_cache_headers(response):
     return response
 
 # Version - used by auto-update checker
-CURRENT_VERSION = "v2.2.0"
+CURRENT_VERSION = "v2.2.1"
 GITHUB_REPO = "takwerx/mediamtx-installer"
 GITHUB_RAW_URL = f"https://raw.githubusercontent.com/{GITHUB_REPO}/main/config-editor/mediamtx_config_editor.py"
 GITHUB_API_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
@@ -196,6 +196,29 @@ def clear_srt_passphrase_backup():
     if os.path.exists(SRT_PASSPHRASE_BACKUP_FILE):
         os.remove(SRT_PASSPHRASE_BACKUP_FILE)
 
+def _yaml_scalar_text(raw):
+    """The string a YAML scalar holds, as written on one line of the file.
+
+    save_config() writes every password as `pass: "..."`, and returning the raw
+    text kept those quotes as part of the password. The console then sent
+    `"secret"` to MediaMTX, which refused it: Watch spun forever and share links
+    failed, but only for viewers outside the box -- loopback is authorised by
+    the `any` user, so the same request from the server itself worked.
+    Unquoted values are returned as-is (a YAML parse would turn 0123 into 123).
+    """
+    raw = raw.strip()
+    if len(raw) >= 2 and raw[0] == raw[-1] and raw[0] in '"\'':
+        try:
+            from io import StringIO
+            value = YAML(typ='safe').load(StringIO(raw))
+            if isinstance(value, str):
+                return value
+        except Exception:
+            pass
+        return raw[1:-1]
+    return raw
+
+
 def get_hlsviewer_credential():
     """Get hlsviewer credential by reading directly from config file"""
     try:
@@ -210,7 +233,7 @@ def get_hlsviewer_credential():
                     if 'pass:' in lines[j]:
                         pass_line = lines[j].strip()
                         if ':' in pass_line:
-                            password = pass_line.split(':', 1)[1].strip()
+                            password = _yaml_scalar_text(pass_line.split(':', 1)[1].strip())
                             if password:
                                 # Ensure it's in group metadata
                                 ensure_hlsviewer_in_metadata()
@@ -6087,9 +6110,12 @@ HTML_TEMPLATE = '''
             // Resolve relative URL to absolute so the popup (about:blank) can fetch it
             const absoluteUrl = isProxied ? (window.location.origin + streamUrl) : streamUrl;
 
-            // Stream name = second-to-last path segment (.../<name>/index.m3u8)
-            const urlParts = absoluteUrl.split('/');
-            const streamName = urlParts.length >= 2 ? urlParts[urlParts.length - 2] : 'stream';
+            // Stream name = the whole path before /index.m3u8, so nested paths such as
+            // live/drone1 keep their prefix. Taking only the last segment sent WebRTC
+            // to "drone1", a path with no stream on it.
+            let streamPath = decodeURIComponent(new URL(absoluteUrl).pathname);
+            if (isProxied) streamPath = streamPath.replace(/^[/]hls-proxy/, '');
+            const streamName = streamPath.replace(/^[/]+/, '').replace(/[/]index[.]m3u8$/, '') || 'stream';
 
             // playbackConfig is loaded once at page load; default to HLS so a
             // failed/absent fetch can never take the watch button offline.
@@ -6098,7 +6124,7 @@ HTML_TEMPLATE = '''
             // same-origin (no CORS), session-authenticated, and it lets the
             // WebRTC port stay bound to localhost like HLS already is.
             const whepUrl = (playbackConfig && playbackConfig.webrtc_available)
-                ? window.location.origin + '/whep/' + encodeURIComponent(streamName)
+                ? window.location.origin + '/whep/' + streamName.split('/').map(encodeURIComponent).join('/')
                 : '';
 
             console.log('[Watch] Resolved URL:', absoluteUrl, '| proxied:', isProxied, '| mode:', playbackMode);
